@@ -3,6 +3,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-} -- For the MonadReader instance.
+{-# LANGUAGE StandaloneDeriving #-}
 
 -- | This module is useful mostly for tracing backend implementors. If you are only interested in
 -- adding tracing to an application, start at "Monitor.Tracing".
@@ -33,6 +34,9 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT(ReaderT), ask, asks, local, runReaderT)
 import Control.Monad.Reader.Class (MonadReader)
 import Control.Monad.Trans.Class (MonadTrans, lift)
+import Control.Monad.Base (MonadBase)
+import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
+import Control.Monad.Trans.Control (MonadBaseControl)
 import qualified Data.Aeson as JSON
 import Data.Foldable (for_)
 import Data.List (sortOn)
@@ -102,7 +106,11 @@ data Scope = Scope
 
 -- | A span generation monad.
 newtype TraceT m a = TraceT { traceTReader :: ReaderT (Maybe Scope) m a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans,
+            MonadMask, MonadThrow, MonadFail, MonadCatch)
+
+deriving  instance MonadBaseControl IO m => MonadBaseControl IO (TraceT m)
+deriving  instance MonadBase IO m => MonadBase IO (TraceT m)
 
 instance MonadReader r m => MonadReader r (TraceT m) where
   ask = lift ask

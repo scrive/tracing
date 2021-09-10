@@ -2,6 +2,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE RankNTypes #-}
 
 -- | This module exposes the generic 'MonadTrace' class.
 module Control.Monad.Trace.Class (
@@ -39,6 +42,7 @@ import qualified Control.Monad.RWS.Strict as RWS.Strict
 import qualified Control.Monad.State.Lazy as State.Lazy
 import qualified Control.Monad.State.Strict as State.Strict
 import Control.Monad.Trans.Class (MonadTrans, lift)
+import qualified Control.Monad.Trans.Control as MTC
 import qualified Control.Monad.Writer.Lazy as Writer.Lazy
 import qualified Control.Monad.Writer.Strict as Writer.Strict
 import qualified Data.Aeson as JSON
@@ -102,6 +106,15 @@ instance (MonadTrace m, Monoid w) => MonadTrace (Writer.Lazy.WriterT w m) where
 
 instance (MonadTrace m, Monoid w) => MonadTrace (Writer.Strict.WriterT w m) where
   trace name (Writer.Strict.WriterT actn) = Writer.Strict.WriterT $ trace name actn
+
+instance {-# OVERLAPPABLE #-} (MonadTrace m, MTC.MonadTransControl t, Monad (t m))
+    => MonadTrace (t m) where
+  trace b m = controlT $ \run -> trace b (run m)
+
+controlT
+  :: (MTC.MonadTransControl t, Monad (t m), Monad m) => (MTC.Run t -> m (MTC.StT t a)) -> t m a
+controlT f = MTC.liftWith f >>= MTC.restoreT . return
+
 
 instance MonadTrace Identity where
   trace _ = id
