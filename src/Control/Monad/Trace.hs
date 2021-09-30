@@ -37,6 +37,7 @@ import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
 import Control.Monad.Trans.Control (MonadBaseControl)
+import Control.Monad.Except (MonadError)
 import qualified Data.Aeson as JSON
 import Data.Foldable (for_)
 import Data.List (sortOn)
@@ -111,6 +112,7 @@ newtype TraceT m a = TraceT { traceTReader :: ReaderT (Maybe Scope) m a }
 
 deriving  instance MonadBaseControl IO m => MonadBaseControl IO (TraceT m)
 deriving  instance MonadBase IO m => MonadBase IO (TraceT m)
+deriving  instance MonadError e m => MonadError e (TraceT m)
 
 instance MonadReader r m => MonadReader r (TraceT m) where
   ask = lift ask
