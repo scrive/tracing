@@ -30,6 +30,8 @@ import Control.Monad.Trace.Class
 import Control.Monad.Trace.Internal
 
 import Control.Applicative ((<|>))
+import Control.Concurrent.STM.Lifted
+import Control.Exception.Lifted
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT(ReaderT), ask, asks, local, runReaderT)
 import Control.Monad.Reader.Class (MonadReader)
@@ -46,9 +48,6 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Time.Clock (NominalDiffTime)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
-import UnliftIO (MonadUnliftIO, withRunInIO)
-import UnliftIO.Exception (finally)
-import UnliftIO.STM (TChan, TVar, atomically, modifyTVar', newTChanIO, newTVarIO, readTVar, writeTChan, writeTVar)
 
 -- | A collection of span tags.
 type Tags = Map Key JSON.Value
@@ -110,15 +109,15 @@ newtype TraceT m a = TraceT { traceTReader :: ReaderT (Maybe Scope) m a }
   deriving (Functor, Applicative, Monad, MonadIO, MonadTrans,
             MonadMask, MonadThrow, MonadFail, MonadCatch)
 
-deriving  instance MonadBaseControl IO m => MonadBaseControl IO (TraceT m)
-deriving  instance MonadBase IO m => MonadBase IO (TraceT m)
-deriving  instance MonadError e m => MonadError e (TraceT m)
+deriving instance MonadBaseControl IO m => MonadBaseControl IO (TraceT m)
+deriving instance MonadBase IO m => MonadBase IO (TraceT m)
+deriving instance MonadError e m => MonadError e (TraceT m)
 
 instance MonadReader r m => MonadReader r (TraceT m) where
   ask = lift ask
   local f (TraceT (ReaderT g)) = TraceT $ ReaderT $ \r -> local f $ g r
 
-instance MonadUnliftIO m => MonadTrace (TraceT m) where
+instance (MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
   trace bldr (TraceT reader) = TraceT $ ask >>= \case
     Nothing -> reader
     Just parentScope -> do
@@ -165,15 +164,12 @@ instance MonadUnliftIO m => MonadTrace (TraceT m) where
 
   addSpanEntry key (TagValue val) = TraceT $ do
     mbTV <- asks (>>= scopeTags)
-    for_ mbTV $ \tv -> atomically $ modifyTVar' tv $ Map.insert key val
+    ReaderT $ \_ -> for_ mbTV $ \tv -> atomically $ modifyTVar' tv $ Map.insert key val
   addSpanEntry key (LogValue val mbTime)  = TraceT $ do
     mbTV <- asks (>>= scopeLogs)
-    for_ mbTV $ \tv -> do
+    ReaderT $ \_ -> for_ mbTV $ \tv -> do
       time <- maybe (liftIO getPOSIXTime) pure mbTime
       atomically $ modifyTVar' tv ((time, key, val) :)
-
-instance MonadUnliftIO m => MonadUnliftIO (TraceT m) where
-  withRunInIO inner = TraceT $ withRunInIO $ \run -> inner (run . traceTReader)
 
 -- | Trace an action, sampling its generated spans. This method is thread-safe and can be used to
 -- trace multiple actions concurrently.
