@@ -4,6 +4,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-} -- For the MonadReader instance.
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- | This module is useful mostly for tracing backend implementors. If you are only interested in
 -- adding tracing to an application, start at "Monitor.Tracing".
@@ -38,7 +39,7 @@ import Control.Monad.Reader.Class (MonadReader)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
-import Control.Monad.Trans.Control (MonadBaseControl)
+import Control.Monad.Trans.Control
 import Control.Monad.Except (MonadError)
 import qualified Data.Aeson as JSON
 import Data.Foldable (for_)
@@ -116,6 +117,11 @@ deriving instance MonadError e m => MonadError e (TraceT m)
 instance MonadReader r m => MonadReader r (TraceT m) where
   ask = lift ask
   local f (TraceT (ReaderT g)) = TraceT $ ReaderT $ \r -> local f $ g r
+
+instance MonadTransControl TraceT where
+  type StT TraceT m = StT (ReaderT (Maybe Scope)) m
+  liftWith = defaultLiftWith TraceT traceTReader
+  restoreT = defaultRestoreT TraceT
 
 instance (MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
   trace bldr (TraceT reader) = TraceT $ ask >>= \case
