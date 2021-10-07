@@ -5,6 +5,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | This module implements a <https://zipkin.apache.org/ Zipkin>-powered trace publisher. You will
 -- almost certainly want to import it qualified.
@@ -44,6 +45,7 @@ import Control.Monad.Trace.Class
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM.Lifted (atomically, tryReadTChan)
+import Control.Exception (catch)
 import Control.Exception.Lifted (finally)
 import Control.Monad (forever, guard, void, when)
 import Control.Monad.Fix (fix)
@@ -71,7 +73,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Time.Clock.POSIX (POSIXTime)
-import Network.HTTP.Client (Manager, Request)
+import Network.HTTP.Client (HttpException, Manager, Request)
 import qualified Network.HTTP.Client as HTTP
 import Network.Socket (HostName, PortNumber)
 
@@ -87,6 +89,8 @@ data Settings = Settings
   -- ^ An optional HTTP manager to use for publishing spans on the Zipkin server.
   , settingsPublishPeriod :: !(Maybe NominalDiffTime)
   -- ^ If set to a positive value, traces will be flushed in the background every such period.
+  , settingsIgnoreBackgroundExceptions :: Bool
+  -- ^ If set to True, background flushes will ignore any `HttpException`s
   }
 
 -- | Creates empty 'Settings'. You will typically use this (or the 'IsString' instance) as starting
@@ -94,7 +98,7 @@ data Settings = Settings
 --
 -- > let settings = defaultSettings { settingsPort = Just 2222 }
 defaultSettings :: Settings
-defaultSettings = Settings Nothing Nothing Nothing Nothing Nothing
+defaultSettings = Settings Nothing Nothing Nothing Nothing Nothing False
 
 -- | Generates settings with the given string as hostname.
 instance IsString Settings where
@@ -125,7 +129,7 @@ flushSpans ept tracer req mgr = do
 
 -- | Creates a 'Zipkin' publisher for the input 'Settings'.
 new :: MonadIO m => Settings -> m Zipkin
-new (Settings mbHostname mbPort mbEpt mbMgr mbPrd) = liftIO $ do
+new (Settings mbHostname mbPort mbEpt mbMgr mbPrd ignore) = liftIO $ do
   mgr <- maybe (HTTP.newManager HTTP.defaultManagerSettings) pure mbMgr
   tracer <- newTracer
   let
@@ -140,7 +144,10 @@ new (Settings mbHostname mbPort mbEpt mbMgr mbPrd) = liftIO $ do
     then pure Nothing
     else fmap Just $ forkIO $ forever $ do
       threadDelay (microSeconds prd)
-      flushSpans mbEpt tracer req mgr -- Manager is thread-safe.
+      let flush = flushSpans mbEpt tracer req mgr -- Manager is thread-safe.
+      if ignore
+        then catch flush (\(_ :: HttpException) -> pure ())
+        else flush
   pure $ Zipkin mgr req tracer mbEpt
 
 -- | Runs a 'TraceT' action, sampling spans appropriately. Note that this method does not publish
