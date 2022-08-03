@@ -34,7 +34,6 @@ module Control.Monad.Trace.Class (
 
 import Control.Monad.Trace.Internal
 
-import Control.Monad.Except (ExceptT(..))
 import Control.Monad.Identity (Identity(..))
 import Control.Monad.Reader (ReaderT(..))
 import qualified Control.Monad.RWS.Lazy as RWS.Lazy
@@ -43,6 +42,7 @@ import qualified Control.Monad.State.Lazy as State.Lazy
 import qualified Control.Monad.State.Strict as State.Strict
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import qualified Control.Monad.Trans.Control as MTC
+import Control.Monad.Trans.Except
 import qualified Control.Monad.Writer.Lazy as Writer.Lazy
 import qualified Control.Monad.Writer.Strict as Writer.Strict
 import qualified Data.Aeson as JSON

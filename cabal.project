@@ -1,0 +1,6 @@
+packages: .
+
+source-repository-package
+    type: git
+    location: https://github.com/matobet/stm-lifted.git
+    tag: f0ab6350f1524b66b1ae4814c30a875909b3fcae
