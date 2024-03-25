@@ -31,6 +31,7 @@ module Control.Monad.Trace (
   newSBQueueIO,
   isEmptySBQueue,
   readSBQueue,
+  readSBQueueOnce,
   writeSBQueue
 ) where
 
@@ -104,14 +105,24 @@ isEmptySBQueue (SBQueue queue count _capacity) = do
   assert (if isEmpty then numElems == 0 else numElems > 0) $
     return isEmpty
 
--- | Read all the values stored in an 'SBQueue'.
-readSBQueue :: SBQueue a -> STM [a]
-readSBQueue (SBQueue queue count _capacity) = do
+data ShouldRetry = Retry | OnlyOnce
+  deriving (Eq)
+
+readSBQueue' :: ShouldRetry -> SBQueue a -> STM [a]
+readSBQueue' shouldRetry (SBQueue queue count _capacity) = do
   elems <- readTVar queue
-  when (null elems) retry
+  when (null elems && shouldRetry == Retry) retry
   writeTVar queue []
   writeTVar count 0
-  return $ reverse elems
+  pure $ reverse elems
+
+-- | Read all the values stored in an 'SBQueue'. Retry if none are available.
+readSBQueue :: SBQueue a -> STM [a]
+readSBQueue = readSBQueue' Retry
+
+-- | A non-retrying version of readSBQueue
+readSBQueueOnce :: SBQueue a -> STM [a]
+readSBQueueOnce = readSBQueue' OnlyOnce
 
 -- | Write a value to an 'SBQueue'.
 writeSBQueue :: SBQueue a -> a -> STM ()
