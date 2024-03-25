@@ -24,6 +24,14 @@ module Control.Monad.Trace (
 
   -- ** Pending spans
   pendingSpanCount,
+
+  -- ** SBQueue
+  SBQueue,
+  defaultQueueCapacity,
+  newSBQueueIO,
+  isEmptySBQueue,
+  readSBQueue,
+  writeSBQueue
 ) where
 
 import Prelude hiding (span)
@@ -32,8 +40,10 @@ import Control.Monad.Trace.Class
 import Control.Monad.Trace.Internal
 
 import Control.Applicative ((<|>))
+import Control.Monad.STM (retry)
 import Control.Concurrent.STM.Lifted
 import Control.Exception.Lifted
+import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT(ReaderT), ask, asks, local, runReaderT)
 import Control.Monad.Reader.Class (MonadReader)
@@ -71,6 +81,48 @@ data Sample = Sample
   -- ^ The span's duration.
   }
 
+-- SBQueue implementation and helpers are all taken shamelessly from logbase
+
+-- | Default capacity of log queues (TBQueue for regular logger, 'SBQueue' for
+-- bulk loggers). This corresponds to approximately 200 MiB memory residency
+-- when the queue is full.
+defaultQueueCapacity :: Int
+defaultQueueCapacity = 1000000
+
+-- | A simple STM based bounded queue.
+data SBQueue a = SBQueue !(TVar [a]) !(TVar Int) !Int
+
+-- | Create an instance of 'SBQueue' with a given capacity.
+newSBQueueIO :: Int -> IO (SBQueue a)
+newSBQueueIO capacity = SBQueue <$> newTVarIO [] <*> newTVarIO 0 <*> pure capacity
+
+-- | Check if an 'SBQueue' is empty.
+isEmptySBQueue :: SBQueue a -> STM Bool
+isEmptySBQueue (SBQueue queue count _capacity) = do
+  isEmpty  <- null <$> readTVar queue
+  numElems <- readTVar count
+  assert (if isEmpty then numElems == 0 else numElems > 0) $
+    return isEmpty
+
+-- | Read all the values stored in an 'SBQueue'.
+readSBQueue :: SBQueue a -> STM [a]
+readSBQueue (SBQueue queue count _capacity) = do
+  elems <- readTVar queue
+  when (null elems) retry
+  writeTVar queue []
+  writeTVar count 0
+  return $ reverse elems
+
+-- | Write a value to an 'SBQueue'.
+writeSBQueue :: SBQueue a -> a -> STM ()
+writeSBQueue (SBQueue queue count capacity) a = do
+  numElems <- readTVar count
+  when (numElems < capacity) $ do
+    modifyTVar queue (a :)
+    -- Strict modification of the queue size to avoid space leak
+    modifyTVar' count (+1)
+
+
 -- | A tracer is a producer of spans.
 --
 -- More specifically, a tracer:
@@ -82,13 +134,13 @@ data Sample = Sample
 -- These samples can then be consumed independently, decoupling downstream span processing from
 -- their production.
 data Tracer = Tracer
-  { tracerChannel :: TChan Sample
+  { tracerQueue :: SBQueue Sample
   , tracerPendingCount :: TVar Int
   }
 
 -- | Creates a new 'Tracer'.
 newTracer :: MonadIO m => m Tracer
-newTracer = liftIO $ Tracer <$> newTChanIO <*> newTVarIO 0
+newTracer = liftIO $ Tracer <$> newSBQueueIO defaultQueueCapacity <*> newTVarIO 0
 
 -- | Returns the number of spans currently in flight (started but not yet completed).
 pendingSpanCount :: Tracer -> TVar Int
@@ -96,8 +148,8 @@ pendingSpanCount = tracerPendingCount
 
 -- | Returns all newly completed spans' samples. The samples become available in the same order they
 -- are completed.
-spanSamples :: Tracer -> TChan Sample
-spanSamples = tracerChannel
+spanSamples :: Tracer -> SBQueue Sample
+spanSamples = tracerQueue
 
 data Scope = Scope
   { scopeTracer :: !Tracer
@@ -163,7 +215,7 @@ instance (MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
                   modifyTVar' (tracerPendingCount tracer) (\n -> n - 1)
                   tags <- readTVar tagsTV
                   logs <- sortOn (\(t, k, _) -> (t, k)) <$> readTVar logsTV
-                  writeTChan (tracerChannel tracer) (Sample spn tags logs start (end - start))
+                  writeSBQueue (tracerQueue tracer) (Sample spn tags logs start (end - start))
           run `finally` cleanup
         else local (const $ Just $ Scope tracer (Just spn) Nothing Nothing) reader
 

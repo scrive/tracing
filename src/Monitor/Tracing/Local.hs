@@ -7,7 +7,7 @@ module Monitor.Tracing.Local (
 
 import Control.Monad.Trace
 
-import Control.Concurrent.STM.Lifted (atomically, readTVar, readTChan, tryReadTChan)
+import Control.Concurrent.STM.Lifted (atomically, readTVar)
 import Control.Monad.Fix (fix)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Control (MonadBaseControl)
@@ -34,10 +34,13 @@ collectSpanSamples actn = do
     samplesTC = spanSamples tracer
     pendingTV = pendingSpanCount tracer
   liftIO $ fix $ \loop -> do
-    (mbSample, pending) <- atomically $ (,) <$> tryReadTChan samplesTC <*> readTVar pendingTV
+    (mbSample, pending) <- atomically $ (,) <$> readSBQueue samplesTC <*> readTVar pendingTV
     case mbSample of
-      Just spl -> addSample spl >> loop
-      Nothing | pending > 0 -> liftIO (atomically $ readTChan samplesTC) >>= addSample >> loop
+      (x:xs) -> mapM_ addSample (x:xs) >> loop
+      [] | pending > 0 -> do
+        toAdd <- liftIO (atomically $ readSBQueue samplesTC)
+        mapM_ addSample toAdd
+        loop
       _ -> pure ()
   spls <- reverse <$> liftIO (readIORef ref)
   pure (rv, spls)
