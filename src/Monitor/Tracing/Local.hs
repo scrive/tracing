@@ -7,7 +7,7 @@ module Monitor.Tracing.Local (
 
 import Control.Monad.Trace
 
-import Control.Concurrent.STM.Lifted (atomically, readTVar)
+import Control.Concurrent.STM (atomically, readTVar)
 import Control.Monad.Fix (fix)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Control (MonadBaseControl)

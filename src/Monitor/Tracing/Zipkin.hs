@@ -45,10 +45,11 @@ import Control.Monad.Trace.Class
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Lifted (fork)
-import Control.Concurrent.STM.Lifted (atomically)
+import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException)
 import Control.Exception.Lifted (finally, try)
 import Control.Monad (forever, guard, unless, void)
+import Control.Monad.Base (liftBase)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Control (MonadBaseControl)
 import qualified Data.Aeson as JSON
@@ -75,7 +76,6 @@ import Data.Time.Clock.POSIX (POSIXTime)
 import Network.HTTP.Client (Manager, Request)
 import qualified Network.HTTP.Client as HTTP
 import Network.Socket (HostName, PortNumber)
-import Control.Monad.Base (liftBase)
 
 -- | 'Zipkin' creation settings.
 data Settings = Settings

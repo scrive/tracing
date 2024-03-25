@@ -10,7 +10,7 @@ import Monitor.Tracing.Local (collectSpanSamples)
 import qualified Monitor.Tracing.Zipkin as ZPK
 
 import Control.Concurrent.Lifted
-import Control.Concurrent.STM.Lifted
+import Control.Concurrent.STM
 import Control.Monad.IO.Class (liftIO, MonadIO)
 import Control.Monad (void)
 import Control.Monad.Reader (MonadReader, Reader, ReaderT, ask, runReader, runReaderT)
@@ -101,8 +101,8 @@ main = hspec $ do
 
   describe "collectSpanSamples" $ do
     it "should collect spans which are still pending after the action returns" $ do
-      spans <- collectSpans $ rootSpan alwaysSampled "sleep-parent" $ do
-        tmv <- newEmptyTMVarIO
-        void $ fork $ childSpan "sleep-child" $ atomically (putTMVar tmv ()) >> threadDelay 20000
-        void $ atomically $ readTMVar tmv
+      spans <- collectSpans . rootSpan alwaysSampled "sleep-parent" $ do
+        tmv <- liftIO newEmptyTMVarIO
+        void . fork . childSpan "sleep-child" . liftIO $ atomically (putTMVar tmv ()) >> threadDelay 20000
+        void . liftIO $ atomically $ readTMVar tmv
       fmap spanName spans `shouldMatchList` ["sleep-parent", "sleep-child"]
