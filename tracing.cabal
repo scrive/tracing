@@ -45,7 +45,6 @@ library
     , mtl >= 2.2
     , network >= 2.8
     , random >= 1.1
-    , stm-lifted >= 2.5
     , stm >= 2.5
     , text >= 1.2
     , time >= 1.8 && < 1.10
@@ -65,7 +64,7 @@ test-suite tracing-test
     , lifted-base >= 0.2.3
     , monad-control >= 1.0
     , mtl
-    , stm-lifted >= 2.5
+    , stm
     , text
     , tracing
   ghc-options: -threaded -rtsopts -with-rtsopts=-N

@@ -41,15 +41,14 @@ import Control.Monad.Trace.Class
 import Control.Monad.Trace.Internal
 
 import Control.Applicative ((<|>))
-import Control.Monad.STM (retry)
-import Control.Concurrent.STM.Lifted
+import Control.Concurrent.STM (STM, TVar, retry, atomically, readTVar, writeTVar, modifyTVar, modifyTVar', newTVarIO)
 import Control.Exception.Lifted
 import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT(ReaderT), ask, asks, local, runReaderT)
 import Control.Monad.Reader.Class (MonadReader)
 import Control.Monad.Trans.Class (MonadTrans, lift)
-import Control.Monad.Base (MonadBase)
+import Control.Monad.Base (MonadBase, liftBase)
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
 import Control.Monad.Trans.Control
 import Control.Monad.Except (MonadError)
@@ -195,10 +194,10 @@ instance (MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
         mbParentSpn = scopeSpan parentScope
         mbParentCtx = spanContext <$> mbParentSpn
         mbTraceID = contextTraceID <$> mbParentCtx
-      spanID <- maybe (liftIO randomSpanID) pure $ builderSpanID bldr
-      traceID <- maybe (liftIO randomTraceID) pure $ builderTraceID bldr <|> mbTraceID
+      spanID <- maybe (liftBase randomSpanID) pure $ builderSpanID bldr
+      traceID <- maybe (liftBase randomTraceID) pure $ builderTraceID bldr <|> mbTraceID
       sampling <- case builderSamplingPolicy bldr of
-        Just policy -> liftIO policy
+        Just policy -> liftBase policy
         Nothing -> pure $ fromMaybe Never (spanSamplingDecision <$> mbParentSpn)
       let
         baggages = fromMaybe Map.empty $ contextBaggages <$> mbParentCtx
@@ -207,20 +206,20 @@ instance (MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
         tracer = scopeTracer parentScope
       if spanIsSampled spn
         then do
-          tagsTV <- newTVarIO $ builderTags bldr
-          logsTV <- newTVarIO []
-          startTV <- newTVarIO Nothing -- To detect whether an exception happened during span setup.
+          tagsTV <- liftBase . newTVarIO $ builderTags bldr
+          logsTV <- liftBase $ newTVarIO []
+          startTV <- liftBase $ newTVarIO Nothing -- To detect whether an exception happened during span setup.
           let
             scope = Scope tracer (Just spn) (Just tagsTV) (Just logsTV)
             run = do
-              start <- liftIO $ getPOSIXTime
-              atomically $ do
+              start <- liftBase getPOSIXTime
+              liftBase . atomically $ do
                 writeTVar startTV (Just start)
                 modifyTVar' (tracerPendingCount tracer) (+1)
               local (const $ Just scope) reader
             cleanup = do
-              end <- liftIO $ getPOSIXTime
-              atomically $ readTVar startTV >>= \case
+              end <- liftBase getPOSIXTime
+              liftBase . atomically $ readTVar startTV >>= \case
                 Nothing -> pure () -- The action was interrupted before the span was pending.
                 Just start -> do
                   modifyTVar' (tracerPendingCount tracer) (\n -> n - 1)
@@ -234,12 +233,12 @@ instance (MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
 
   addSpanEntry key (TagValue val) = TraceT $ do
     mbTV <- asks (>>= scopeTags)
-    ReaderT $ \_ -> for_ mbTV $ \tv -> atomically $ modifyTVar' tv $ Map.insert key val
+    ReaderT $ \_ -> for_ mbTV $ \tv -> liftBase . atomically $ modifyTVar' tv $ Map.insert key val
   addSpanEntry key (LogValue val mbTime)  = TraceT $ do
     mbTV <- asks (>>= scopeLogs)
     ReaderT $ \_ -> for_ mbTV $ \tv -> do
-      time <- maybe (liftIO getPOSIXTime) pure mbTime
-      atomically $ modifyTVar' tv ((time, key, val) :)
+      time <- maybe (liftBase getPOSIXTime) pure mbTime
+      liftBase . atomically $ modifyTVar' tv ((time, key, val) :)
 
 -- | Trace an action, sampling its generated spans. This method is thread-safe and can be used to
 -- trace multiple actions concurrently.
