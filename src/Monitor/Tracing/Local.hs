@@ -34,11 +34,11 @@ collectSpanSamples actn = do
     samplesTC = spanSamples tracer
     pendingTV = pendingSpanCount tracer
   liftIO $ fix $ \loop -> do
-    (mbSample, pending) <- atomically $ (,) <$> readSBQueue samplesTC <*> readTVar pendingTV
+    (mbSample, pending) <- atomically $ (,) <$> readSBQueueOnce samplesTC <*> readTVar pendingTV
     case mbSample of
       (x:xs) -> mapM_ addSample (x:xs) >> loop
       [] | pending > 0 -> do
-        toAdd <- liftIO (atomically $ readSBQueue samplesTC)
+        toAdd <- liftIO (atomically $ readSBQueueOnce samplesTC)
         mapM_ addSample toAdd
         loop
       _ -> pure ()
