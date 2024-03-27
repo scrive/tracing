@@ -21,7 +21,7 @@ module Monitor.Tracing.Zipkin (
   Endpoint(..), defaultEndpoint,
 
   -- * Publishing traces
-  Zipkin,
+  Zipkin(..),
   new, run, publish, with,
 
   -- * Cross-process spans

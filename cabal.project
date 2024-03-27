@@ -1,1 +1,3 @@
-packages: .
+packages: 
+  .
+  tracing-effectful
