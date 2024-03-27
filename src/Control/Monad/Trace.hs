@@ -5,6 +5,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-} -- For the MonadReader instance.
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 
 -- | This module is useful mostly for tracing backend implementors. If you are only interested in
@@ -25,6 +26,9 @@ module Control.Monad.Trace (
   -- ** Pending spans
   pendingSpanCount,
 
+  -- ** Scope
+  Scope(..),
+
   -- ** SBQueue
   SBQueue,
   defaultQueueCapacity,
@@ -32,7 +36,9 @@ module Control.Monad.Trace (
   isEmptySBQueue,
   readSBQueue,
   readSBQueueOnce,
-  writeSBQueue
+  writeSBQueue,
+  traceWith,
+  addSpanEntryWith
 ) where
 
 import Prelude hiding (span)
@@ -42,7 +48,8 @@ import Control.Monad.Trace.Internal
 
 import Control.Applicative ((<|>))
 import Control.Concurrent.STM (STM, TVar, retry, atomically, readTVar, writeTVar, modifyTVar, modifyTVar', newTVarIO)
-import Control.Exception.Lifted
+import Control.Exception.Lifted hiding (finally)
+import Control.Monad.Catch (finally)
 import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT(ReaderT), ask, asks, local, runReaderT)
@@ -186,48 +193,59 @@ instance MonadTransControl TraceT where
   liftWith = defaultLiftWith TraceT traceTReader
   restoreT = defaultRestoreT TraceT
 
-instance (MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
-  trace bldr (TraceT reader) = TraceT $ ask >>= \case
-    Nothing -> reader
-    Just parentScope -> do
-      let
-        mbParentSpn = scopeSpan parentScope
-        mbParentCtx = spanContext <$> mbParentSpn
-        mbTraceID = contextTraceID <$> mbParentCtx
-      spanID <- maybe (liftBase randomSpanID) pure $ builderSpanID bldr
-      traceID <- maybe (liftBase randomTraceID) pure $ builderTraceID bldr <|> mbTraceID
-      sampling <- case builderSamplingPolicy bldr of
-        Just policy -> liftBase policy
-        Nothing -> pure $ fromMaybe Never (spanSamplingDecision <$> mbParentSpn)
-      let
-        baggages = fromMaybe Map.empty $ contextBaggages <$> mbParentCtx
-        ctx = Context traceID spanID (builderBaggages bldr `Map.union` baggages)
-        spn = Span (builderName bldr) ctx (builderReferences bldr) sampling
-        tracer = scopeTracer parentScope
-      if spanIsSampled spn
-        then do
-          tagsTV <- liftBase . newTVarIO $ builderTags bldr
-          logsTV <- liftBase $ newTVarIO []
-          startTV <- liftBase $ newTVarIO Nothing -- To detect whether an exception happened during span setup.
-          let
-            scope = Scope tracer (Just spn) (Just tagsTV) (Just logsTV)
-            run = do
-              start <- liftBase getPOSIXTime
-              liftBase . atomically $ do
-                writeTVar startTV (Just start)
-                modifyTVar' (tracerPendingCount tracer) (+1)
-              local (const $ Just scope) reader
-            cleanup = do
-              end <- liftBase getPOSIXTime
-              liftBase . atomically $ readTVar startTV >>= \case
-                Nothing -> pure () -- The action was interrupted before the span was pending.
-                Just start -> do
-                  modifyTVar' (tracerPendingCount tracer) (\n -> n - 1)
-                  tags <- readTVar tagsTV
-                  logs <- sortOn (\(t, k, _) -> (t, k)) <$> readTVar logsTV
-                  writeSBQueue (tracerQueue tracer) (Sample spn tags logs start (end - start))
-          run `finally` cleanup
-        else local (const $ Just $ Scope tracer (Just spn) Nothing Nothing) reader
+traceWith :: (Monad m, MonadMask m) => (forall x. IO x -> m x) -> Builder -> Scope -> (Scope -> m a) -> m a
+traceWith lifter bldr parentScope f = do
+  let mbParentSpn = scopeSpan parentScope
+      mbParentCtx = spanContext <$> mbParentSpn
+      mbTraceID = contextTraceID <$> mbParentCtx
+  spanID <- maybe (lifter randomSpanID) pure $ builderSpanID bldr
+  traceID <- maybe (lifter randomTraceID) pure $ builderTraceID bldr <|> mbTraceID
+  sampling <- case builderSamplingPolicy bldr of
+    Just policy -> lifter policy
+    Nothing -> pure $ fromMaybe Never (spanSamplingDecision <$> mbParentSpn)
+  let baggages = fromMaybe Map.empty $ contextBaggages <$> mbParentCtx
+      ctx = Context traceID spanID (builderBaggages bldr `Map.union` baggages)
+      spn = Span (builderName bldr) ctx (builderReferences bldr) sampling
+      tracer = scopeTracer parentScope
+  if spanIsSampled spn
+    then do
+      tagsTV <- lifter . newTVarIO $ builderTags bldr
+      logsTV <- lifter $ newTVarIO []
+      startTV <- lifter $ newTVarIO Nothing -- To detect whether an exception happened during span setup.
+      let scope = Scope tracer (Just spn) (Just tagsTV) (Just logsTV)
+          run = do
+            start <- lifter getPOSIXTime
+            lifter . atomically $ do
+              writeTVar startTV (Just start)
+              modifyTVar' (tracerPendingCount tracer) (+1)
+            f scope
+          cleanup = do
+             end <- lifter getPOSIXTime
+             lifter . atomically $ readTVar startTV >>= \case
+               Nothing -> pure () -- The action was interrupted before the span was pending.
+               Just start -> do
+                 modifyTVar' (tracerPendingCount tracer) (\n -> n - 1)
+                 tags <- readTVar tagsTV
+                 logs <- sortOn (\(t, k, _) -> (t, k)) <$> readTVar logsTV
+                 writeSBQueue (tracerQueue tracer) (Sample spn tags logs start (end - start))
+      run `finally` cleanup
+    else f $ Scope tracer (Just spn) Nothing Nothing
+
+addSpanEntryWith :: (MonadBaseControl IO m, MonadIO m) => Maybe Scope -> Key -> Value -> m ()
+addSpanEntryWith scopes key (TagValue val) = do
+  let mbTV = scopes >>= scopeTags
+  for_ mbTV $ \tv -> liftBase . atomically . modifyTVar' tv $ Map.insert key val
+addSpanEntryWith scopes key (LogValue val mbTime) = do
+  let mbTV = scopes >>= scopeLogs
+  for_ mbTV $ \tv -> do
+      time <- maybe (liftBase getPOSIXTime) pure mbTime
+      liftBase . atomically $ modifyTVar' tv ((time, key, val) :)
+
+instance (MonadMask m, MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
+  trace bldr (TraceT reader) = 
+    let useChildScope childScope = local (const . Just $ childScope) reader
+        withScope parentScope = traceWith liftBase bldr parentScope useChildScope
+    in TraceT $ ask >>= maybe reader withScope
 
   activeSpan = TraceT $ asks (>>= scopeSpan)
 
