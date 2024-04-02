@@ -59,6 +59,7 @@ common language
     default-extensions: DataKinds
                         FlexibleContexts
                         KindSignatures
+                        LambdaCase
                         TypeFamilies
                         TypeOperators
 
@@ -77,9 +78,9 @@ library
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.17.2.1
+    build-depends:   base ^>=4.17.2.1
                    , effectful-core  >=1.0.0.0    && <3.0.0.0
-		   , exceptions 
+                   , exceptions
                    , tracing >= 0.0.7.2
 
     -- Directories containing source files.

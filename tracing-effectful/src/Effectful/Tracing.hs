@@ -64,11 +64,11 @@ runZipkinTracing actn zipkin = runTracing actn (zipkinTracer zipkin)
 
 -- | Orphan, canonical instance.
 instance Trace :> es => MonadTrace (Eff es) where
-  trace bldr f = do
-    Trace scope <- getStaticRep
-    let useChildScope childScope = localStaticRep (const $ Trace (Just childScope)) f
-        withScope parentScope = traceWith unsafeEff_ bldr parentScope useChildScope
-    maybe f withScope scope
+  trace bldr f = getStaticRep >>= \case
+    Trace Nothing -> f
+    Trace (Just scope) -> unsafeSeqUnliftIO $ \unlift -> do
+      traceWith2 bldr scope $ \childScope -> do
+        unlift $ localStaticRep (const . Trace $ Just childScope) f
 
   activeSpan = do
     Trace scope <- getStaticRep
@@ -76,4 +76,4 @@ instance Trace :> es => MonadTrace (Eff es) where
 
   addSpanEntry key value = do
     Trace scope <- getStaticRep
-    unsafeEff_ $ addSpanEntryWith scope key value
+    unsafeEff_ $ addSpanEntryWith2 scope key value

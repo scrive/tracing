@@ -38,7 +38,9 @@ module Control.Monad.Trace (
   readSBQueueOnce,
   writeSBQueue,
   traceWith,
-  addSpanEntryWith
+  traceWith2,
+  addSpanEntryWith,
+  addSpanEntryWith2
 ) where
 
 import Prelude hiding (span)
@@ -193,6 +195,9 @@ instance MonadTransControl TraceT where
   liftWith = defaultLiftWith TraceT traceTReader
   restoreT = defaultRestoreT TraceT
 
+traceWith2 :: Builder -> Scope -> (Scope -> IO a) -> IO a
+traceWith2 = traceWith id
+
 traceWith :: (Monad m, MonadMask m) => (forall x. IO x -> m x) -> Builder -> Scope -> (Scope -> m a) -> m a
 traceWith lifter bldr parentScope f = do
   let mbParentSpn = scopeSpan parentScope
@@ -231,6 +236,9 @@ traceWith lifter bldr parentScope f = do
       run `finally` cleanup
     else f $ Scope tracer (Just spn) Nothing Nothing
 
+addSpanEntryWith2 :: Maybe Scope -> Key -> Value -> IO ()
+addSpanEntryWith2 = addSpanEntryWith
+
 addSpanEntryWith :: (MonadBaseControl IO m, MonadIO m) => Maybe Scope -> Key -> Value -> m ()
 addSpanEntryWith scopes key (TagValue val) = do
   let mbTV = scopes >>= scopeTags
@@ -241,22 +249,18 @@ addSpanEntryWith scopes key (LogValue val mbTime) = do
       time <- maybe (liftBase getPOSIXTime) pure mbTime
       liftBase . atomically $ modifyTVar' tv ((time, key, val) :)
 
-instance (MonadMask m, MonadBaseControl IO m, MonadIO m) => MonadTrace (TraceT m) where
-  trace bldr (TraceT reader) = 
-    let useChildScope childScope = local (const . Just $ childScope) reader
-        withScope parentScope = traceWith liftBase bldr parentScope useChildScope
-    in TraceT $ ask >>= maybe reader withScope
+instance (MonadMask m, MonadBaseControl IO m) => MonadTrace (TraceT m) where
+  trace bldr (TraceT reader) = TraceT $ ask >>= \case
+    Nothing -> reader
+    Just scope -> control $ \unlift -> do
+      traceWith2 bldr scope $ \childScope -> do
+        unlift $ local (const $ Just childScope) reader
 
   activeSpan = TraceT $ asks (>>= scopeSpan)
 
-  addSpanEntry key (TagValue val) = TraceT $ do
-    mbTV <- asks (>>= scopeTags)
-    ReaderT $ \_ -> for_ mbTV $ \tv -> liftBase . atomically $ modifyTVar' tv $ Map.insert key val
-  addSpanEntry key (LogValue val mbTime)  = TraceT $ do
-    mbTV <- asks (>>= scopeLogs)
-    ReaderT $ \_ -> for_ mbTV $ \tv -> do
-      time <- maybe (liftBase getPOSIXTime) pure mbTime
-      liftBase . atomically $ modifyTVar' tv ((time, key, val) :)
+  addSpanEntry key value = TraceT $ do
+    scope <- ask
+    liftBase $ addSpanEntryWith2 scope key value
 
 -- | Trace an action, sampling its generated spans. This method is thread-safe and can be used to
 -- trace multiple actions concurrently.
