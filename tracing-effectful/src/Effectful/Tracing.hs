@@ -7,7 +7,7 @@ module Effectful.Tracing
     
         -- * Handler
     ,   runTracing
-    ,   runTracing'
+    ,   runTracingMaybe
 
         -- * Zipkin utilities
     ,   runZipkinTracing
@@ -39,14 +39,14 @@ runTracing
   => Eff (Trace : es) a
   -> Tracer
   -> Eff es a
-runTracing actn = runTracing'  actn . pure
+runTracing actn = runTracingMaybe  actn . pure
 
-runTracing' 
+runTracingMaybe
   :: IOE :> es
   => Eff (Trace : es) a
   -> Maybe Tracer
   -> Eff es a
-runTracing' actn mbTracer = 
+runTracingMaybe actn mbTracer = 
   let scope = fmap (\tracer -> Scope tracer Nothing Nothing Nothing) mbTracer
   in evalStaticRep (Trace scope) actn
 
