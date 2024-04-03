@@ -38,9 +38,7 @@ module Control.Monad.Trace (
   readSBQueueOnce,
   writeSBQueue,
   traceWith,
-  traceWith2,
-  addSpanEntryWith,
-  addSpanEntryWith2
+  addSpanEntryWith
 ) where
 
 import Prelude hiding (span)
@@ -195,18 +193,15 @@ instance MonadTransControl TraceT where
   liftWith = defaultLiftWith TraceT traceTReader
   restoreT = defaultRestoreT TraceT
 
-traceWith2 :: Builder -> Scope -> (Scope -> IO a) -> IO a
-traceWith2 = traceWith id
-
-traceWith :: (Monad m, MonadMask m) => (forall x. IO x -> m x) -> Builder -> Scope -> (Scope -> m a) -> m a
-traceWith lifter bldr parentScope f = do
+traceWith :: Builder -> Scope -> (Scope -> IO a) -> IO a
+traceWith bldr parentScope f = do
   let mbParentSpn = scopeSpan parentScope
       mbParentCtx = spanContext <$> mbParentSpn
       mbTraceID = contextTraceID <$> mbParentCtx
-  spanID <- maybe (lifter randomSpanID) pure $ builderSpanID bldr
-  traceID <- maybe (lifter randomTraceID) pure $ builderTraceID bldr <|> mbTraceID
+  spanID <- maybe randomSpanID pure $ builderSpanID bldr
+  traceID <- maybe randomTraceID pure $ builderTraceID bldr <|> mbTraceID
   sampling <- case builderSamplingPolicy bldr of
-    Just policy -> lifter policy
+    Just policy -> policy
     Nothing -> pure $ fromMaybe Never (spanSamplingDecision <$> mbParentSpn)
   let baggages = fromMaybe Map.empty $ contextBaggages <$> mbParentCtx
       ctx = Context traceID spanID (builderBaggages bldr `Map.union` baggages)
@@ -214,19 +209,19 @@ traceWith lifter bldr parentScope f = do
       tracer = scopeTracer parentScope
   if spanIsSampled spn
     then do
-      tagsTV <- lifter . newTVarIO $ builderTags bldr
-      logsTV <- lifter $ newTVarIO []
-      startTV <- lifter $ newTVarIO Nothing -- To detect whether an exception happened during span setup.
+      tagsTV <- newTVarIO $ builderTags bldr
+      logsTV <- newTVarIO []
+      startTV <- newTVarIO Nothing -- To detect whether an exception happened during span setup.
       let scope = Scope tracer (Just spn) (Just tagsTV) (Just logsTV)
           run = do
-            start <- lifter getPOSIXTime
-            lifter . atomically $ do
+            start <- getPOSIXTime
+            atomically $ do
               writeTVar startTV (Just start)
               modifyTVar' (tracerPendingCount tracer) (+1)
             f scope
           cleanup = do
-             end <- lifter getPOSIXTime
-             lifter . atomically $ readTVar startTV >>= \case
+             end <- getPOSIXTime
+             atomically $ readTVar startTV >>= \case
                Nothing -> pure () -- The action was interrupted before the span was pending.
                Just start -> do
                  modifyTVar' (tracerPendingCount tracer) (\n -> n - 1)
@@ -236,31 +231,28 @@ traceWith lifter bldr parentScope f = do
       run `finally` cleanup
     else f $ Scope tracer (Just spn) Nothing Nothing
 
-addSpanEntryWith2 :: Maybe Scope -> Key -> Value -> IO ()
-addSpanEntryWith2 = addSpanEntryWith
-
-addSpanEntryWith :: (MonadBaseControl IO m, MonadIO m) => Maybe Scope -> Key -> Value -> m ()
+addSpanEntryWith :: Maybe Scope -> Key -> Value -> IO ()
 addSpanEntryWith scopes key (TagValue val) = do
   let mbTV = scopes >>= scopeTags
-  for_ mbTV $ \tv -> liftBase . atomically . modifyTVar' tv $ Map.insert key val
+  for_ mbTV $ \tv -> atomically . modifyTVar' tv $ Map.insert key val
 addSpanEntryWith scopes key (LogValue val mbTime) = do
   let mbTV = scopes >>= scopeLogs
   for_ mbTV $ \tv -> do
-      time <- maybe (liftBase getPOSIXTime) pure mbTime
-      liftBase . atomically $ modifyTVar' tv ((time, key, val) :)
+      time <- maybe getPOSIXTime pure mbTime
+      atomically $ modifyTVar' tv ((time, key, val) :)
 
 instance (MonadMask m, MonadBaseControl IO m) => MonadTrace (TraceT m) where
   trace bldr (TraceT reader) = TraceT $ ask >>= \case
     Nothing -> reader
     Just scope -> control $ \unlift -> do
-      traceWith2 bldr scope $ \childScope -> do
+      traceWith bldr scope $ \childScope -> do
         unlift $ local (const $ Just childScope) reader
 
   activeSpan = TraceT $ asks (>>= scopeSpan)
 
   addSpanEntry key value = TraceT $ do
     scope <- ask
-    liftBase $ addSpanEntryWith2 scope key value
+    liftBase $ addSpanEntryWith scope key value
 
 -- | Trace an action, sampling its generated spans. This method is thread-safe and can be used to
 -- trace multiple actions concurrently.

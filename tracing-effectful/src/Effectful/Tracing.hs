@@ -67,7 +67,7 @@ instance Trace :> es => MonadTrace (Eff es) where
   trace bldr f = getStaticRep >>= \case
     Trace Nothing -> f
     Trace (Just scope) -> unsafeSeqUnliftIO $ \unlift -> do
-      traceWith2 bldr scope $ \childScope -> do
+      traceWith bldr scope $ \childScope -> do
         unlift $ localStaticRep (const . Trace $ Just childScope) f
 
   activeSpan = do
@@ -76,4 +76,4 @@ instance Trace :> es => MonadTrace (Eff es) where
 
   addSpanEntry key value = do
     Trace scope <- getStaticRep
-    unsafeEff_ $ addSpanEntryWith2 scope key value
+    unsafeEff_ $ addSpanEntryWith scope key value
