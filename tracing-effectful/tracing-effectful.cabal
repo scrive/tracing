@@ -1,6 +1,6 @@
 cabal-version:   3.0
 name:            tracing-effectful
-version:         0.1.0.0
+version:         1.0.0.0
 license:         BSD-3-Clause
 license-file:    LICENSE
 author:          Adrien Duclos
@@ -33,7 +33,7 @@ library
     , base            <5
     , effectful-core  >=1.0.0.0 && <3.0.0.0
     , exceptions      <0.11
-    , tracing         >=0.0.7   && <1.0.0.0
+    , tracing         ==1.0.0.0
 
   hs-source-dirs:  src
 
