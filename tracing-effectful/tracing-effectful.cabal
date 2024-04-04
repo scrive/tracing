@@ -1,0 +1,48 @@
+cabal-version:   3.0
+name:            tracing-effectful
+version:         0.1.0.0
+license:         BSD-3-Clause
+license-file:    LICENSE
+author:          Adrien Duclos
+maintainer:      adrien.duclos@scrive.com
+category:        Development
+synopsis:        Distributed tracing in Eff
+description:
+  Adaptation of the tracing library for the Effectful ecosystem
+
+build-type:      Simple
+extra-doc-files: CHANGELOG.md
+tested-with:
+  GHC ==8.10.7 || ==9.0.2 || ==9.2.8 || ==9.4.8 || ==9.6.4 || ==9.8.2
+
+common language
+  ghc-options:        -Wall -Wcompat -Wno-unticked-promoted-constructors
+  default-language:   Haskell2010
+  default-extensions:
+    DataKinds
+    FlexibleContexts
+    KindSignatures
+    LambdaCase
+    TypeFamilies
+    TypeOperators
+
+library
+  import:          language
+  exposed-modules: Effectful.Tracing
+  build-depends:
+    , base            <5
+    , effectful-core  >=1.0.0.0 && <3.0.0.0
+    , exceptions      <0.11
+    , tracing         >=0.0.7   && <1.0.0.0
+
+  hs-source-dirs:  src
+
+test-suite tracing-effectful-test
+  import:           language
+  default-language: Haskell2010
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Main.hs
+  build-depends:
+    , base               <5
+    , tracing-effectful
