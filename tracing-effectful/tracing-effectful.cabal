@@ -32,8 +32,8 @@ library
   build-depends:
     , base            <5
     , effectful-core  >=1.0.0.0 && <3.0.0.0
-    , exceptions      <0.11
-    , tracing         ==1.0.0.0
+    , exceptions      >=0.10
+    , tracing         >=1.0
 
   hs-source-dirs:  src
 
