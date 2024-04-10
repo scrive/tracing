@@ -20,6 +20,7 @@ common language
   default-extensions:
     DataKinds
     FlexibleContexts
+    GADTs
     KindSignatures
     LambdaCase
     TypeFamilies

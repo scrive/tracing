@@ -4,10 +4,10 @@ module Effectful.Tracing
     (
         -- * Effect
         Trace
-    
+
         -- * Handler
-    ,   runTracing
-    ,   runTracingMaybe
+    ,   runTrace
+    ,   runNoTrace
 
         -- * Zipkin utilities
     ,   runZipkinTracing
@@ -18,62 +18,65 @@ module Effectful.Tracing
     ) where
 
 import Effectful
-import Effectful.Dispatch.Static
+import Effectful.Dispatch.Dynamic
+import Effectful.Reader.Static
 import Control.Monad.Trace
 import Control.Monad.Trace.Class
 import Control.Monad.Catch (finally)
 import Monitor.Tracing
 import Monitor.Tracing.Zipkin (Zipkin(zipkinTracer), Settings, new, publish)
 
--- | Provides the ability to send traces to a backend
-data Trace :: Effect
+-- | Provides the ability to send traces to a backend.
+data Trace :: Effect where
+  Trace :: Builder -> m a -> Trace m a
+  ActiveSpan :: Trace m (Maybe Span)
+  AddSpanEntry :: Key -> Value -> Trace m ()
 
-type instance DispatchOf Trace = Static WithSideEffects
-newtype instance StaticRep Trace = Trace (Maybe Scope)
+type instance DispatchOf Trace = Dynamic
 
--- | Run the 'Tracing' effect.
+-- | Run the 'Trace' effect.
 --
--- /Note:/ this is the @effectful@ version of 'runTracingT'.
-runTracing
+-- /Note:/ this is the @effectful@ version of 'runTraceT'.
+runTrace
   :: IOE :> es
-  => Eff (Trace : es) a
-  -> Tracer
+  => Tracer
+  -> Eff (Trace : es) a
   -> Eff es a
-runTracing actn = runTracingMaybe  actn . pure
+runTrace tracer = reinterpret (runReader initialScope) $ \env -> \case
+  Trace bldr action -> localSeqUnlift env $ \unlift -> do
+    scope <- ask
+    withSeqEffToIO $ \runInIO -> do
+      traceWith bldr scope $ \childScope -> do
+        runInIO . local (const childScope) $ unlift action
+  ActiveSpan -> asks scopeSpan
+  AddSpanEntry key value -> do
+    scope <- ask
+    liftIO $ addSpanEntryWith (Just scope) key value
+  where
+    initialScope = Scope tracer Nothing Nothing Nothing
 
-runTracingMaybe
-  :: IOE :> es
-  => Eff (Trace : es) a
-  -> Maybe Tracer
-  -> Eff es a
-runTracingMaybe actn mbTracer = 
-  let scope = fmap (\tracer -> Scope tracer Nothing Nothing Nothing) mbTracer
-  in evalStaticRep (Trace scope) actn
+-- | Run the 'Trace' effect with a dummy handler that does no tracing.
+runNoTrace :: IOE :> es => Eff (Trace : es) a -> Eff es a
+runNoTrace = interpret $ \env -> \case
+  Trace _ action -> localSeqUnlift env $ \unlift -> unlift action
+  ActiveSpan -> pure Nothing
+  AddSpanEntry _ _ -> pure ()
 
--- | Convenience method to start a 'Zipkin', run an action, and publish all spans before returning.
+-- | Convenience method to start a 'Zipkin', run an action, and publish all
+-- spans before returning.
 withZipkin :: (IOE :> es) => Settings -> (Zipkin -> Eff es a) -> Eff es a
 withZipkin settings f = do
-  zipkin <- unsafeEff_ $ new settings
+  zipkin <- liftIO $ new settings
   f zipkin `finally` publish zipkin
 
 -- | Runs a 'TraceT' action, sampling spans appropriately. Note that this method does not publish
 -- spans on its own; to do so, either call 'publish' manually or specify a positive
 -- 'settingsPublishPeriod' to publish in the background.
-runZipkinTracing :: (IOE :> es) => Eff (Trace : es) a -> Zipkin -> Eff es a
-runZipkinTracing actn zipkin = runTracing actn (zipkinTracer zipkin)
+runZipkinTracing :: (IOE :> es) => Zipkin -> Eff (Trace : es) a -> Eff es a
+runZipkinTracing zipkin = runTrace (zipkinTracer zipkin)
 
 -- | Orphan, canonical instance.
 instance Trace :> es => MonadTrace (Eff es) where
-  trace bldr f = getStaticRep >>= \case
-    Trace Nothing -> f
-    Trace (Just scope) -> unsafeSeqUnliftIO $ \unlift -> do
-      traceWith bldr scope $ \childScope -> do
-        unlift $ localStaticRep (const . Trace $ Just childScope) f
-
-  activeSpan = do
-    Trace scope <- getStaticRep
-    pure (scope >>= scopeSpan)
-
-  addSpanEntry key value = do
-    Trace scope <- getStaticRep
-    unsafeEff_ $ addSpanEntryWith scope key value
+  trace bldr action = send (Trace bldr action)
+  activeSpan = send ActiveSpan
+  addSpanEntry key value = send (AddSpanEntry key value)
