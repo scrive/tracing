@@ -1,6 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
-module Effectful.Tracing
+module Effectful.Trace
     (
         -- * Effect
         Trace
@@ -10,19 +10,19 @@ module Effectful.Tracing
     ,   runNoTrace
 
         -- * Zipkin utilities
-    ,   runZipkinTracing
+    ,   runZipkinTrace
     ,   withZipkin
 
         -- * Reexport
     ,  module Monitor.Tracing
     ) where
 
+import Control.Monad.Catch (finally)
+import Control.Monad.Trace
+import Control.Monad.Trace.Class
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Reader.Static
-import Control.Monad.Trace
-import Control.Monad.Trace.Class
-import Control.Monad.Catch (finally)
 import Monitor.Tracing
 import Monitor.Tracing.Zipkin (Zipkin(zipkinTracer), Settings, new, publish)
 
@@ -72,8 +72,8 @@ withZipkin settings f = do
 -- | Runs a 'TraceT' action, sampling spans appropriately. Note that this method does not publish
 -- spans on its own; to do so, either call 'publish' manually or specify a positive
 -- 'settingsPublishPeriod' to publish in the background.
-runZipkinTracing :: (IOE :> es) => Zipkin -> Eff (Trace : es) a -> Eff es a
-runZipkinTracing zipkin = runTrace (zipkinTracer zipkin)
+runZipkinTrace :: (IOE :> es) => Zipkin -> Eff (Trace : es) a -> Eff es a
+runZipkinTrace zipkin = runTrace (zipkinTracer zipkin)
 
 -- | Orphan, canonical instance.
 instance Trace :> es => MonadTrace (Eff es) where

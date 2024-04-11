@@ -28,7 +28,7 @@ common language
 
 library
   import:          language
-  exposed-modules: Effectful.Tracing
+  exposed-modules: Effectful.Trace
   build-depends:
     , base            <5
     , effectful-core  >=1.0.0.0 && <3.0.0.0
