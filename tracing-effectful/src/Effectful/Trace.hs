@@ -9,22 +9,16 @@ module Effectful.Trace
     ,   runTrace
     ,   runNoTrace
 
-        -- * Zipkin utilities
-    ,   runZipkinTrace
-    ,   withZipkin
-
         -- * Reexport
     ,  module Monitor.Tracing
     ) where
 
-import Control.Monad.Catch (finally)
 import Control.Monad.Trace
 import Control.Monad.Trace.Class
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Reader.Static
 import Monitor.Tracing
-import Monitor.Tracing.Zipkin (Zipkin(zipkinTracer), Settings, new, publish)
 
 -- | Provides the ability to send traces to a backend.
 data Trace :: Effect where
@@ -61,19 +55,6 @@ runNoTrace = interpret $ \env -> \case
   Trace _ action -> localSeqUnlift env $ \unlift -> unlift action
   ActiveSpan -> pure Nothing
   AddSpanEntry _ _ -> pure ()
-
--- | Convenience method to start a 'Zipkin', run an action, and publish all
--- spans before returning.
-withZipkin :: (IOE :> es) => Settings -> (Zipkin -> Eff es a) -> Eff es a
-withZipkin settings f = do
-  zipkin <- liftIO $ new settings
-  f zipkin `finally` publish zipkin
-
--- | Runs a 'TraceT' action, sampling spans appropriately. Note that this method does not publish
--- spans on its own; to do so, either call 'publish' manually or specify a positive
--- 'settingsPublishPeriod' to publish in the background.
-runZipkinTrace :: (IOE :> es) => Zipkin -> Eff (Trace : es) a -> Eff es a
-runZipkinTrace zipkin = runTrace (zipkinTracer zipkin)
 
 -- | Orphan, canonical instance.
 instance Trace :> es => MonadTrace (Eff es) where
